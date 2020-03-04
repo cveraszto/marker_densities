@@ -1,0 +1,7 @@
+.idea
+.ipynb_checkpoints
+old
+output
+data
+*_py_cache_
+*.pyc
