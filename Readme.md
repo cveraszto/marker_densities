@@ -20,6 +20,7 @@ Create the directories *data* and *output* at the root of the project.
 ### 2. Required input files
 The scripts require: 
 * The 2017 version of the *annotation atlas* from the AIBS together with the json file containing the region hierarchy description.
+* The corrected *annotation_atlas* from the CA
 * The neuron densities from the CA expressed as neuron/voxel
 * The Excel files containing density of inhibitory neurons from Kim et al (2017) and other literature sources.
 * Processed marker expression volumes files from the ISH experiments from the AIBS (GAD1, Pvalb, SST, VIP). 

@@ -532,9 +532,10 @@ def place_cells(annotation, uniques, children,
 
             sum_dens = np.zeros(annotation.shape)[filter_]
             for i_marker in range(num_marker):
-                dens_markers[i_marker, filter_] = dens_placed = fill_density_dataset(loc_mean_markers[i_marker],
-                                                                                     np.ones(annotation.shape)[filter_],
-                                                                                     loc_neu_dens - sum_dens, None)
+                dens_placed = fill_density_dataset(loc_mean_markers[i_marker],
+                                                   np.ones(annotation.shape)[filter_],
+                                                   loc_neu_dens - sum_dens, None)
+                dens_markers[i_marker, filter_] = np.copy(dens_placed)
                 sum_dens += dens_placed
                 std_markers[i_marker][str(id_reg)] = [
                     min(loc_min_markers[i_marker], num_placed[i_marker] + np.sum(dens_placed)),
