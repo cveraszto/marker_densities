@@ -2,6 +2,8 @@ import numpy as np
 import sys
 import xlrd
 from IPython.display import clear_output
+import pylab as plt
+from matplotlib import patches
 
 
 def scale_density_dataset(
@@ -336,8 +338,7 @@ def get_neuron_counts(annotation, density,
         child_neuron[id_to_region_dictionary_ALLNAME[uniq]] = np.sum(density[annotation == uniq])
     num_neurons = {}
     for parent, child in children.items():
-        children[parent] = np.unique(child)
-        num_neurons[parent] = 0.0
+        num_neurons[parent] = child_neuron[parent] if parent in child_neuron.keys() else 0.
         for id_reg in children[parent]:
             if id_to_region_dictionary_ALLNAME[id_reg] in child_neuron:
                 num_neurons[parent] += child_neuron[id_to_region_dictionary_ALLNAME[id_reg]]
@@ -393,7 +394,34 @@ def find_children(uniques, id_to_region_dictionary_ALLNAME, is_leaf,
     return children, order_
 
 
-def export_volumes(annotation, is_leaf, region_dictionary_to_id_ALLNAME, resolution=25.0):
+def filter_region(annotation, allname, children,
+                  is_leaf, region_dictionary_to_id_ALLNAME):
+    """
+    Computes a 3d boolean mask to filter a region and its subregion from the annotations.
+    Dictionaries parameters correspond to the ones produced in JSONread.
+
+    Parameters:
+        annotation: 3D numpy ndarray of integers ids of the regions
+        allname: Complete name of the region
+        children: Dictionary of region complete name to list of child region ids
+        is_leaf: dictionary from region complete name to boolean, True if the region is a leaf region.
+        region_dictionary_to_id_ALLNAME: dictionary from region complete name to region id
+
+    Returns:
+        3d numpy ndarray of boolean, boolean mask with all the voxels of a region and its children set to True.
+    """
+    if not is_leaf[allname]:
+        filter_ = np.in1d(annotation,
+                          np.concatenate((children[allname], [region_dictionary_to_id_ALLNAME[allname]]))
+                          ).reshape(annotation.shape)
+    else:
+        filter_ = annotation == region_dictionary_to_id_ALLNAME[allname]
+    return filter_
+
+
+def export_volumes(annotation, is_leaf,
+                   id_to_region_dictionary_ALLNAME, region_dictionary_to_id_ALLNAME,
+                   region_dictionary_to_id_ALLNAME_parent, name2allname, resolution=25.0):
     """
     Computes the volume in um3 of each region of the brain.
     Dictionaries parameters correspond to the ones produced in JSONread.
@@ -401,33 +429,39 @@ def export_volumes(annotation, is_leaf, region_dictionary_to_id_ALLNAME, resolut
     Parameters:
         annotation: 3D numpy ndarray of integers ids of the regions
         is_leaf: dictionary from region complete name to boolean, True if the region is a leaf region.
+        id_to_region_dictionary_ALLNAME: dictionary from region id to region complete name
         region_dictionary_to_id_ALLNAME: dictionary from region complete name to region id
+        region_dictionary_to_id_ALLNAME_parent: dictionary from region complete name to its parent complete name
+        name2allname: dictionary from region name to region complete name
         resolution: size of each voxel in um
 
     Returns:
         Dictionary of region complete name to its volume in um3
     """
 
-    leafs = {}
-    for k, v in is_leaf.items():
-        if v:
-            leafs[k] = region_dictionary_to_id_ALLNAME[k]
+    uniques = find_unique_regions(annotation, 
+                        id_to_region_dictionary_ALLNAME, 
+                        region_dictionary_to_id_ALLNAME,
+                        region_dictionary_to_id_ALLNAME_parent, 
+                        name2allname)
 
-    rv_LEAF = {}
-    for jn, idreg in leafs.items():
-        rv_LEAF[ jn ] = np.nonzero(annotation==idreg)[0].shape[0] * (resolution**3.0)
+    children, order_ = find_children(uniques, id_to_region_dictionary_ALLNAME, is_leaf,
+                                      region_dictionary_to_id_ALLNAME_parent, 
+                                      region_dictionary_to_id_ALLNAME)
+    
+    uniques = uniques[np.argsort(order_)]
 
-    rv = {}
-    for rnk in region_dictionary_to_id_ALLNAME.keys():
-        rv[ rnk ] = 0.0
-    for rnk in rv_LEAF.keys():
-        split_name = rnk.split("|")
-        for isn in range(1,len(split_name)):
-            name_TMP = ""
-            for iisn in range(isn+1):
-                name_TMP += split_name[iisn]+"|"
-            if len(name_TMP[:-1])>0:
-                rv[ name_TMP[:-1] ] += rv_LEAF[ rnk ]
+    rv_ann = {}
+    for idreg in uniques:
+        rv_ann[id_to_region_dictionary_ALLNAME[idreg]] = np.nonzero(annotation==idreg)[0].shape[0] * (resolution**3.0)
+    rv = rv_ann.copy()
+    for allname, idchildren in children.items():
+        if allname not in rv:
+            rv[allname] = 0
+        for id_child in idchildren:
+            allname_child = id_to_region_dictionary_ALLNAME[id_child]
+            if allname_child in rv_ann:
+                rv[allname] += rv_ann[allname_child]
     return rv
 
 
@@ -435,7 +469,8 @@ def place_cells(annotation, uniques, children,
                 rv, neu_dens, num_neurons,
                 markers_intensity, alphas, std_fitt, 
                 names, mean_literature, down_std_literature, up_std_literature,
-                id_to_region_dictionary_ALLNAME, is_leaf, id_to_region_dictionary):
+                id_to_region_dictionary_ALLNAME, region_dictionary_to_id_ALLNAME,
+                is_leaf, id_to_region_dictionary):
     """
     Loops through all the unique region ids and compute the densities of each marker according to literature value if available
     or the transfer function from marker mean expresion in the region to region densities.
@@ -458,6 +493,7 @@ def place_cells(annotation, uniques, children,
         down_std_literature: List of region minimal density values (mean - std) for each marker according to literature
         up_std_literature: List of region maximal density values (mean + std) for each marker according to literature
         id_to_region_dictionary_ALLNAME: dictionary from region id to region complete name
+        region_dictionary_to_id_ALLNAME: dictionary from region complete name to region id
         is_leaf: dictionary from region complete name to boolean, True if the region is a leaf region.
         id_to_region_dictionary: dictionary from region id to region name
 
@@ -483,11 +519,7 @@ def place_cells(annotation, uniques, children,
 
             # filter voxels in region
             allname = id_to_region_dictionary_ALLNAME[id_reg]
-            if is_leaf[allname]:
-                filter_ = annotation == id_reg
-            else:
-                ids_reg = np.concatenate((children[allname], [id_reg]))
-                filter_ = np.in1d(annotation, ids_reg).reshape(annotation.shape)
+            filter_ = filter_region(annotation, allname, children, is_leaf, region_dictionary_to_id_ALLNAME)
             name = id_to_region_dictionary[id_reg]
             volume = rv[allname] / 1.0e9
             loc_neu_dens = neu_dens[filter_]
@@ -542,3 +574,128 @@ def place_cells(annotation, uniques, children,
                     max(loc_max_markers[i_marker], num_placed[i_marker] + np.sum(dens_placed))]
         progress_bar(100)
     return dens_markers, std_markers
+
+
+def get_region_tree_position(region_dictionary_to_id, region_dictionary_to_id_parent):
+    """
+    Computes a the distance of each region from a leaf region in the region hierarchy tree.
+    Dictionaries parameters correspond to the ones produced in JSONread.
+
+    Parameters:
+        region_dictionary_to_id: dictionary from region name to region id
+        region_dictionary_to_id_parent: dictionary from region name to its parent name
+
+    Returns:
+         Dictionary from region name to distance from leaf in the tree.
+    """
+
+    region_tree_positions = {}
+    for kkk in region_dictionary_to_id.keys():
+        num_parent = 0
+        current_obj = kkk
+        no_more_parent = False
+        while not no_more_parent:
+            if region_dictionary_to_id_parent[current_obj] != "":
+                num_parent += 1
+                current_obj = region_dictionary_to_id_parent[current_obj]
+            else:
+                no_more_parent = True
+        region_tree_positions[kkk] = num_parent
+    return region_tree_positions
+
+
+def plot_circular_dens(num_neurons, title_, filename,
+                       name2allname, region_keys, region_dictionary_to_id,
+                       region_dictionary_to_id_parent, region_to_color,
+                       hasInfo=None, without_cereb=False):
+    """
+    Plots a circular distribution of the cell counts of the regions.
+    If hasInfo is specified, regions for which hasInfo is false will appear in grey
+    If without_cereb is True, will ignore the Cerebellum regions.
+    Dictionaries parameters correspond to the ones produced in JSONread.
+
+    Parameters:
+        num_neurons: dictionary from region allname to neuron counts
+        title_: Title of the resulting figure
+        filename: String Path to store the output figure
+        name2allname: dictionary from region name to region complete name
+        region_keys: List of regions name
+        region_dictionary_to_id: dictionary from region name to region id
+        region_dictionary_to_id_parent: dictionary from region name to its parent name
+        region_to_color: dictionary from region complete name to its color in RGB
+        hasInfo: If specified, dictionary from region complete name to boolean,
+                        True if the region should be colorized
+        without_cereb: Flag to plot the disk without the Cerebellum
+    """
+
+    show_known = hasInfo is not None
+    region_tree_positions = get_region_tree_position(region_dictionary_to_id, region_dictionary_to_id_parent)
+    max_ = np.max(list(region_tree_positions.values()))
+    for k, v in region_tree_positions.items():
+        region_tree_positions[k] = v / max_
+
+    totNumCells = num_neurons[name2allname["Basic cell groups and regions"]]
+    cereb_allname = name2allname["Cerebellar cortex"]
+    cereb_num = num_neurons[cereb_allname]
+    if without_cereb:
+        totNumCells -= cereb_num
+    currentCategoryPos  = {}
+    currentCategorySize = {}
+    wedgeSizes = []
+    wedges = {}
+    reg_names = []
+
+    ff, ax = plt.subplots(figsize=(14 * 1.2, 8 * 1.2))
+    for i, kkk in enumerate(region_keys):
+        allname = name2allname[kkk]
+        if without_cereb and "Cerebellar cortex" in allname:
+            continue
+        reg_names.append(kkk)
+        isUnknown = not hasInfo[i] if show_known else False
+        parent_ = region_dictionary_to_id_parent[ kkk ]
+        if allname not in num_neurons:
+            popRatio = 0.0
+        else:
+            if without_cereb and kkk in cereb_allname:
+                popRatio = (num_neurons[allname] - cereb_num) / totNumCells
+            else: popRatio = num_neurons[allname] / totNumCells
+        if isUnknown:
+            colorRegTMP = np.ones(3, dtype=np.float32) * 0.7 # Grey color
+        else:
+            colorRegTMP = np.float32(np.array(region_to_color[ allname ])) / 255.0
+
+        if parent_ == "":
+            yPos = 0.0
+            currentCategoryPos[  kkk ] = 0.0
+            currentCategorySize[ kkk ] = 0.0
+        else:
+            yPos = currentCategoryPos[  parent_ ] + currentCategorySize[ parent_ ]
+            currentCategoryPos[  kkk  ] = yPos
+            currentCategorySize[ kkk  ] = 0.0
+            currentCategorySize[ parent_ ] += popRatio
+        wedges[kkk] = wedge = [region_tree_positions[kkk] + 1.0 / max_, yPos*360.0,
+                               (yPos + popRatio) * 360.0, colorRegTMP, isUnknown]
+        ax.add_patch( patches.Wedge((0.0, 0.0), 1.0, wedge[1], wedge[2], color=wedge[3], width=1.0 - wedge[0] + 1.0 / max_))
+        wedgeSizes.append(np.fabs(wedge[2]-wedge[1]))
+
+    wedgeSizesArgs = np.argsort(np.array(wedgeSizes))[::-1]
+    numFirstRegions = len(wedgeSizesArgs)
+    usedPositions = [-max_]
+    for iw in range(numFirstRegions):
+        kkk = np.array(reg_names)[wedgeSizesArgs[iw]]
+        wedge = wedges[kkk]
+        if not wedge[4] and kkk != "root":
+            textXpos = (wedge[0]-0.05)*np.sin((wedge[1]+wedge[2])*0.5*np.pi/180.0)
+            if np.min(np.fabs(textXpos-np.array(usedPositions)))>0.10:
+                plt.plot( [(wedge[0]-0.05)*np.cos((wedge[1]+wedge[2])*0.5*np.pi/180.0),1.1-0.03],
+                          [(wedge[0]-0.05)*np.sin((wedge[1]+wedge[2])*0.5*np.pi/180.0),textXpos],
+                          "-", color='black')
+                plt.text( 1.1, textXpos, kkk, horizontalalignment="left", verticalalignment="center" )
+                usedPositions.append( textXpos )
+    plt.xlim([-1.05 - 0.50, 2.10])
+    plt.ylim([-1.05, 1.05])
+    ax.axis('off')
+    plt.title(title_)
+    plt.tight_layout()
+
+    plt.savefig(filename, dpi=400)

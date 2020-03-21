@@ -8,7 +8,7 @@ region_dictionary_to_id_ALLNAME = {}  # complete name to id
 
 region_dictionary_to_id_ALLNAME_parent = {
 }  # complete name to complete name parent
-region_dictionary_to_id_parent = {}  # name to complete name parent
+region_dictionary_to_id_parent = {}  # name to name parent
 allname2name = {}  # complete name to name
 name2allname = {}  # name to complete name
 region_keys = []  # list of regions names
